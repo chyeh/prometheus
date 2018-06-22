@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io/ioutil"
 	"math"
@@ -27,7 +26,6 @@ import (
 	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/yaml.v2"
 
-	"github.com/prometheus/client_golang/api"
 	"github.com/prometheus/client_golang/api/prometheus/v1"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
@@ -368,23 +366,13 @@ func CheckMetrics() int {
 
 // QueryInstant performs an instant query against a Prometheus server.
 func QueryInstant(url string, query string) int {
-	config := api.Config{
-		Address: url,
-	}
-
-	// Create new client.
-	c, err := api.NewClient(config)
+	q, err := newAPI(url)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error creating API client:", err)
 		return 1
 	}
 
-	// Run query against client.
-	api := v1.NewAPI(c)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	val, err := api.Query(ctx, query, time.Now())
-	cancel()
+	val, err := q.QueryInstant(query, time.Now())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "query error:", err)
 		return 1
@@ -397,12 +385,7 @@ func QueryInstant(url string, query string) int {
 
 // QueryRange performs a range query against a Prometheus server.
 func QueryRange(url string, query string, start string, end string) int {
-	config := api.Config{
-		Address: url,
-	}
-
-	// Create new client.
-	c, err := api.NewClient(config)
+	q, err := newAPI(url)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error creating API client:", err)
 		return 1
@@ -437,13 +420,7 @@ func QueryRange(url string, query string, start string, end string) int {
 	// Convert seconds to nanoseconds such that time.Duration parses correctly.
 	step := time.Duration(resolution * 1e9)
 
-	// Run query against client.
-	api := v1.NewAPI(c)
-	r := v1.Range{Start: stime, End: etime, Step: step}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	val, err := api.QueryRange(ctx, query, r)
-	cancel()
-
+	val, err := q.QueryRange(query, v1.Range{Start: stime, End: etime, Step: step})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "query error:", err)
 		return 1
