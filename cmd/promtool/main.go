@@ -97,7 +97,17 @@ func main() {
 		os.Exit(QueryInstant(*queryServer, *queryExpr))
 
 	case queryRangeCmd.FullCommand():
-		os.Exit(QueryRange(*queryRangeServer, *queryRangeExpr, *queryRangeBegin, *queryRangeEnd))
+		stime, err := parseTime(*queryRangeBegin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error parsing start time:", err)
+			os.Exit(1)
+		}
+		etime, err := parseTime(*queryRangeEnd)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error parsing end time:", err)
+			os.Exit(1)
+		}
+		os.Exit(QueryRange(*queryRangeServer, *queryRangeExpr, stime, etime))
 
 	case debugPprofCmd.FullCommand():
 		os.Exit(debugPprof(*debugPprofServer))
@@ -384,43 +394,20 @@ func QueryInstant(url string, query string) int {
 }
 
 // QueryRange performs a range query against a Prometheus server.
-func QueryRange(url string, query string, start string, end string) int {
+func QueryRange(url string, query string, start time.Time, end time.Time) int {
 	q, err := newAPI(url)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error creating API client:", err)
 		return 1
 	}
 
-	var stime, etime time.Time
-
-	if end == "" {
-		etime = time.Now()
-	} else {
-		etime, err = parseTime(end)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error parsing end time:", err)
-			return 1
-		}
+	timeRange, err := timeToRange(start, end)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error time range:", err)
+		return 1
 	}
 
-	if start == "" {
-		stime = etime.Add(-5 * time.Minute)
-	} else {
-		stime, err = parseTime(start)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error parsing start time:", err)
-		}
-	}
-
-	if !stime.Before(etime) {
-		fmt.Fprintln(os.Stderr, "start time is not before end time")
-	}
-
-	resolution := math.Max(math.Floor(etime.Sub(stime).Seconds()/250), 1)
-	// Convert seconds to nanoseconds such that time.Duration parses correctly.
-	step := time.Duration(resolution * 1e9)
-
-	val, err := q.QueryRange(query, v1.Range{Start: stime, End: etime, Step: step})
+	val, err := q.QueryRange(query, *timeRange)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "query error:", err)
 		return 1
@@ -431,6 +418,11 @@ func QueryRange(url string, query string, start string, end string) int {
 }
 
 func parseTime(s string) (time.Time, error) {
+	// Default Value
+	if s == "" {
+		return time.Time{}, nil
+	}
+
 	if t, err := strconv.ParseFloat(s, 64); err == nil {
 		s, ns := math.Modf(t)
 		return time.Unix(int64(s), int64(ns*float64(time.Second))), nil
@@ -439,6 +431,29 @@ func parseTime(s string) (time.Time, error) {
 		return t, nil
 	}
 	return time.Time{}, fmt.Errorf("cannot parse %q to a valid timestamp", s)
+}
+
+func timeToRange(start time.Time, end time.Time) (*v1.Range, error) {
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if start.IsZero() {
+		start = end.Add(-5 * time.Minute)
+	}
+
+	if start.After(end) {
+		return nil, fmt.Errorf("start time is not before end time")
+	}
+
+	resolution := math.Max(math.Floor(end.Sub(start).Seconds()/250), 1)
+	// Convert seconds to nanoseconds such that time.Duration parses correctly.
+	step := time.Duration(resolution * 1e9)
+
+	return &v1.Range{
+		Start: start,
+		End:   end,
+		Step:  step,
+	}, nil
 }
 
 func debugPprof(url string) int {
